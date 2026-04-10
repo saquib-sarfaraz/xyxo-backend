@@ -98,6 +98,9 @@ const XP_WIN = 50;
 const XP_LOSS = 10;
 const XP_DRAW = 25;
 
+const DEBUG = true;
+const log = (...args) => DEBUG && console.log("[GAME]", ...args);
+
 const updateFinishedMatchStats = async (game, winnerMark) => {
   if (!Array.isArray(game.players) || game.players.length < 2) return;
 
@@ -218,45 +221,128 @@ const recordMatchResult = async (game, winnerMark) => {
   });
 };
 
-export const makeMove = async (gameId, userId, index) => {
+export const makeMove = async (gameId, userId, index, powerUp = null, powerUpTarget = null) => {
   if (!mongoose.isValidObjectId(gameId)) throw new HttpError(400, "Invalid game id");
   if (!Number.isInteger(index) || index < 0 || index > 8) throw new HttpError(400, "Invalid move index");
+
+  log("MOVE request", { gameId, userId, index, powerUp, powerUpTarget });
 
   const game = await Game.findById(gameId);
   if (!game) throw new HttpError(404, "Game not found");
 
-  if (game.status !== "playing") throw new HttpError(409, "Game is not active");
-  if (!Array.isArray(game.players) || game.players.length < 2) throw new HttpError(409, "Waiting for opponent");
+  if (game.isProcessing) {
+    log("MOVE rejected - already processing", { gameId, userId });
+    throw new HttpError(409, "Game is processing another move");
+  }
+
+  if (game.status !== "playing") {
+    log("MOVE rejected - not playing", { gameId, userId, status: game.status });
+    throw new HttpError(409, "Game is not active");
+  }
+  if (!Array.isArray(game.players) || game.players.length < 2) {
+    log("MOVE rejected - waiting for opponent", { gameId, userId });
+    throw new HttpError(409, "Waiting for opponent");
+  }
+  if (game.winner) {
+    log("MOVE rejected - game has winner", { gameId, userId, winner: game.winner });
+    throw new HttpError(409, "Game already has a winner");
+  }
 
   const mark = userMark(game, userId);
-  if (!mark) throw new HttpError(403, "Forbidden");
-  if (game.turn !== mark) throw new HttpError(409, "Not your turn");
-  if (game.board[index]) throw new HttpError(409, "Cell already taken");
-
-  game.board[index] = mark;
-  game.turnStartedAt = new Date();
-
-  const winner = computeWinner(game.board);
-  if (winner) {
-    game.status = "finished";
-    game.winner = winner;
-    game.result = winner === "DRAW" ? "draw" : winner;
-    game.finishedAt = new Date();
-  } else {
-    game.turn = mark === "X" ? "O" : "X";
+  if (!mark) {
+    log("MOVE rejected - not a player", { gameId, userId });
+    throw new HttpError(403, "Forbidden");
+  }
+  if (game.turn !== mark) {
+    log("MOVE rejected - not turn", { gameId, userId, mark, turn: game.turn });
+    throw new HttpError(409, "Not your turn");
+  }
+  if (game.board[index]) {
+    log("MOVE rejected - cell taken", { gameId, userId, index, board: game.board });
+    throw new HttpError(409, "Cell already taken");
   }
 
-  await game.save();
-  if (winner) {
-    try {
-      await Promise.all([updateFinishedMatchStats(game, winner), recordMatchResult(game, winner)]);
-    } catch (err) {
-      // Don't break gameplay if stats/leaderboard bookkeeping fails.
-      console.error("Failed to record match result.", err);
+  const frozenMark = game.frozenPlayer;
+  if (frozenMark === mark) {
+    log("MOVE rejected - player frozen", { gameId, userId, frozenMark });
+    throw new HttpError(409, "You are frozen");
+  }
+
+  const isProcessingUpdate = { $set: { isProcessing: true } };
+  const lockAcquired = await Game.findOneAndUpdate(
+    { _id: gameId, isProcessing: false },
+    isProcessingUpdate,
+    { new: false }
+  );
+
+  if (!lockAcquired) {
+    log("MOVE rejected - could not acquire lock", { gameId, userId });
+    throw new HttpError(409, "Game is processing another move");
+  }
+
+  try {
+    const freshGame = await Game.findById(gameId);
+
+    if (freshGame.board[index]) {
+      log("MOVE rejected - cell taken (race)", { gameId, userId, index });
+      throw new HttpError(409, "Cell already taken");
     }
-  }
 
-  return await fetchGame(game._id);
+    freshGame.board[index] = mark;
+    freshGame.turnStartedAt = new Date();
+    log("BOARD after move", { gameId, board: freshGame.board });
+
+    let nextTurn = mark === "X" ? "O" : "X";
+    let nextFrozen = "";
+
+    if (powerUp === "freeze" && freshGame.status === "playing") {
+      freshGame.powerUpUsed = "freeze";
+      freshGame.frozenPlayer = nextTurn;
+      log("POWERUP freeze applied", { gameId, frozenPlayer: nextTurn });
+    } else if (powerUp === "remove" && powerUpTarget !== null && freshGame.status === "playing") {
+      if (powerUpTarget < 0 || powerUpTarget > 8) {
+        throw new HttpError(400, "Invalid power-up target");
+      }
+      const opponentMark = mark === "X" ? "O" : "X";
+      if (freshGame.board[powerUpTarget] !== opponentMark) {
+        throw new HttpError(400, "Can only remove opponent's mark");
+      }
+      freshGame.powerUpUsed = "remove";
+      freshGame.powerUpTarget = powerUpTarget;
+      freshGame.board[powerUpTarget] = "";
+      log("POWERUP remove applied", { gameId, target: powerUpTarget, board: freshGame.board });
+    }
+
+    const winner = computeWinner(freshGame.board);
+    if (winner) {
+      freshGame.status = "finished";
+      freshGame.winner = winner;
+      freshGame.result = winner === "DRAW" ? "draw" : winner;
+      freshGame.finishedAt = new Date();
+      log("GAME finished", { gameId, winner });
+    } else {
+      freshGame.turn = nextTurn;
+      freshGame.frozenPlayer = nextFrozen;
+      log("TURN switched", { gameId, turn: freshGame.turn, frozen: freshGame.frozenPlayer });
+    }
+
+    freshGame.isProcessing = false;
+    await freshGame.save();
+
+    if (winner) {
+      try {
+        await Promise.all([updateFinishedMatchStats(freshGame, winner), recordMatchResult(freshGame, winner)]);
+      } catch (err) {
+        console.error("Failed to record match result.", err);
+      }
+    }
+
+    log("MOVE completed", { gameId, winner, turn: freshGame.turn });
+    return await fetchGame(freshGame._id);
+  } catch (err) {
+    await Game.updateOne({ _id: gameId }, { $set: { isProcessing: false } });
+    throw err;
+  }
 };
 
 export const leaveGame = async (gameId, userId) => {
@@ -281,6 +367,10 @@ export const leaveGame = async (gameId, userId) => {
   game.turn = "X";
   game.turnStartedAt = new Date();
   game.rematchVotes = [];
+  game.isProcessing = false;
+  game.frozenPlayer = "";
+  game.powerUpUsed = "";
+  game.powerUpTarget = null;
 
   await game.save();
   return await fetchGame(game._id);

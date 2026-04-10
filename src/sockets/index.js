@@ -675,10 +675,12 @@ export const initSocket = (httpServer) => {
       try {
         const gameId = data?.gameId;
         const index = data?.index;
+        const powerUp = data?.powerUp || null;
+        const powerUpTarget = data?.powerUpTarget ?? null;
         if (!Number.isInteger(index) || index < 0 || index > 8) {
           throw new HttpError(400, "Invalid move index");
         }
-        const game = await makeMove(gameId, socket.data.userId, index);
+        const game = await makeMove(gameId, socket.data.userId, index, powerUp, powerUpTarget);
         const payload = broadcastGameUpdate(gameId, game);
         if (typeof ack === "function") ack({ ok: true, ...payload });
       } catch (err) {

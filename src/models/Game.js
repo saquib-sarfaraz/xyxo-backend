@@ -28,7 +28,11 @@ const gameSchema = new mongoose.Schema(
     rematchVotes: {
       type: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
       default: () => []
-    }
+    },
+    isProcessing: { type: Boolean, default: false },
+    frozenPlayer: { type: String, enum: ["X", "O", ""], default: "" },
+    powerUpUsed: { type: String, enum: ["freeze", "remove", ""], default: "" },
+    powerUpTarget: { type: Number, min: 0, max: 8 }
   },
   { timestamps: true, versionKey: false }
 );
