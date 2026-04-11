@@ -32,7 +32,17 @@ const gameSchema = new mongoose.Schema(
     isProcessing: { type: Boolean, default: false },
     frozenPlayer: { type: String, enum: ["X", "O", ""], default: "" },
     powerUpUsed: { type: String, enum: ["freeze", "remove", ""], default: "" },
-    powerUpTarget: { type: Number, min: 0, max: 8 }
+    powerUpTarget: { type: Number, min: 0, max: 8 },
+    powerUps: {
+      X: {
+        freeze: { type: Number, default: 1 },
+        remove: { type: Number, default: 1 }
+      },
+      O: {
+        freeze: { type: Number, default: 1 },
+        remove: { type: Number, default: 1 }
+      }
+    }
   },
   { timestamps: true, versionKey: false }
 );

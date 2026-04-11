@@ -309,9 +309,18 @@ export const makeMove = async (gameId, userId, index, powerUp = null, powerUpTar
     }
 
     if (powerUp === "freeze" && freshGame.status === "playing") {
+      const powerUps = freshGame.powerUps || { X: { freeze: 1, remove: 1 }, O: { freeze: 1, remove: 1 } };
+      const playerPowerUps = powerUps[mark] || { freeze: 1, remove: 1 };
+      if (playerPowerUps.freeze <= 0) {
+        throw new HttpError(400, "No freeze power-up remaining");
+      }
+      freshGame.powerUps = {
+        ...powerUps,
+        [mark]: { ...playerPowerUps, freeze: playerPowerUps.freeze - 1 }
+      };
       freshGame.powerUpUsed = "freeze";
       freshGame.frozenPlayer = nextTurn;
-      log("POWERUP freeze applied", { gameId, frozenPlayer: nextTurn });
+      log("POWERUP freeze applied", { gameId, frozenPlayer: nextTurn, powerUps: freshGame.powerUps });
     } else if (powerUp === "remove" && powerUpTarget !== null && freshGame.status === "playing") {
       if (powerUpTarget < 0 || powerUpTarget > 8) {
         throw new HttpError(400, "Invalid power-up target");
@@ -320,10 +329,19 @@ export const makeMove = async (gameId, userId, index, powerUp = null, powerUpTar
       if (freshGame.board[powerUpTarget] !== opponentMark) {
         throw new HttpError(400, "Can only remove opponent's mark");
       }
+      const powerUps = freshGame.powerUps || { X: { freeze: 1, remove: 1 }, O: { freeze: 1, remove: 1 } };
+      const playerPowerUps = powerUps[mark] || { freeze: 1, remove: 1 };
+      if (playerPowerUps.remove <= 0) {
+        throw new HttpError(400, "No remove power-up remaining");
+      }
+      freshGame.powerUps = {
+        ...powerUps,
+        [mark]: { ...playerPowerUps, remove: playerPowerUps.remove - 1 }
+      };
       freshGame.powerUpUsed = "remove";
       freshGame.powerUpTarget = powerUpTarget;
       freshGame.board[powerUpTarget] = "";
-      log("POWERUP remove applied", { gameId, target: powerUpTarget, board: freshGame.board });
+      log("POWERUP remove applied", { gameId, target: powerUpTarget, board: freshGame.board, powerUps: freshGame.powerUps });
     }
 
     const winner = computeWinner(freshGame.board);

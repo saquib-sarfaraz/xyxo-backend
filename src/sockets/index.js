@@ -5,7 +5,6 @@ import { verifyAccessToken } from "../config/jwt.js";
 import FriendRequest from "../models/FriendRequest.js";
 import User from "../models/User.js";
 import {
-  autoMove,
   getGame,
   joinGame,
   leaveGame,
@@ -18,7 +17,6 @@ import { HttpError } from "../utils/httpError.js";
 
 let ioRef = null;
 
-const TURN_TIMEOUT_MS = 6_000;
 const RESTART_DELAY_MS = 3_000;
 const DISCONNECT_GRACE_MS = 10_000;
 const SOCKET_DEBUG = ["1", "true", "yes"].includes(String(env.SOCKET_DEBUG || "").toLowerCase());
@@ -63,7 +61,6 @@ const fetchLeaderboardData = async (limit = 50) => {
   return users.map((user, index) => toLeaderboardItem(user, index));
 };
 
-const turnTimers = new Map(); // gameId -> Timeout
 const restartTimers = new Map(); // gameId -> Timeout
 const presence = new Map(); // gameId -> Map(userId -> Set(socketId))
 const leaveGraceTimers = new Map(); // `${gameId}:${userId}` -> Timeout
@@ -156,12 +153,6 @@ const removePresence = (gameId, userId, socketId) => {
   return true;
 };
 
-const clearTurnTimer = (gameId) => {
-  const timer = turnTimers.get(gameId);
-  if (timer) clearTimeout(timer);
-  turnTimers.delete(gameId);
-};
-
 const clearRestartTimer = (gameId) => {
   const timer = restartTimers.get(gameId);
   if (timer) clearTimeout(timer);
@@ -194,7 +185,6 @@ const scheduleAutoRestart = (io, game) => {
       }
 
       emitGameUpdate(io, gameId, updated);
-      scheduleTurnTimer(io, updated);
       debug("auto restart applied", { gameId });
     } catch (err) {
       debug("auto restart failed", { gameId, error: err?.message });
@@ -202,35 +192,6 @@ const scheduleAutoRestart = (io, game) => {
   }, RESTART_DELAY_MS);
 
   restartTimers.set(gameId, timer);
-};
-
-const scheduleTurnTimer = (io, game) => {
-  const gameId = String(game?._id || "");
-  if (!gameId) return;
-
-  clearTurnTimer(gameId);
-
-  const isActive =
-    game.status === "playing" &&
-    !game.winner &&
-    Array.isArray(game.players) &&
-    game.players.length === 2;
-
-  if (!isActive) return;
-
-  const timer = setTimeout(async () => {
-    try {
-      const result = await autoMove(gameId);
-      if (!result?.game) return;
-
-      io.to(gameId).emit("game:auto_move", { index: result.index, symbol: result.symbol });
-      broadcastGameUpdate(gameId, result.game);
-    } catch {
-      // ignore
-    }
-  }, TURN_TIMEOUT_MS);
-
-  turnTimers.set(gameId, timer);
 };
 
 const userRoom = (userId) => `user:${userId}`;
@@ -580,7 +541,6 @@ export const initSocket = (httpServer) => {
         if (game?.status === "playing" && Array.isArray(game?.players) && game.players.length === 2) {
           io.to(gameId).emit("game:start", payload);
         }
-        scheduleTurnTimer(io, game);
 
         if (typeof ack === "function") ack({ ok: true, ...payload });
       } catch (err) {
@@ -634,7 +594,6 @@ export const initSocket = (httpServer) => {
         });
 
         const payload = emitGameUpdate(io, gameId, game);
-        scheduleTurnTimer(io, game);
         if (typeof ack === "function") ack({ ok: true, ...payload });
       } catch (err) {
         const msg = err instanceof HttpError ? err.message : "Join failed";
@@ -654,7 +613,6 @@ export const initSocket = (httpServer) => {
         const userFullyLeft = removePresence(gameId, socket.data.userId, socket.id);
         if (!userFullyLeft) return;
 
-        clearTurnTimer(gameId);
         if (!immediate) {
           scheduleLeaveGrace(io, gameId, socket.data.userId);
           return;
@@ -693,7 +651,45 @@ export const initSocket = (httpServer) => {
         if (typeof ack === "function") ack({ ok: true, ...payload });
       } catch (err) {
         const msg = err instanceof HttpError ? err.message : "Move failed";
-        debug("MOVE failed", { gameId, userId: socket.data.userId, error: msg });
+        debug("MOVE failed", { gameId: data?.gameId, userId: socket.data.userId, error: msg });
+        socket.emit("game:error", { error: msg });
+        if (typeof ack === "function") ack({ ok: false, error: msg });
+      }
+    });
+
+    socket.on("game:freeze", async (data, ack) => {
+      try {
+        const gameId = data?.gameId;
+        if (!gameId) throw new HttpError(400, "Missing gameId");
+        debug("FREEZE request", { gameId, userId: socket.data.userId });
+        const game = await makeMove(gameId, socket.data.userId, -1, "freeze", null);
+        debug("FREEZE applied", { gameId, frozenPlayer: game?.frozenPlayer });
+        const payload = broadcastGameUpdate(gameId, game);
+        if (typeof ack === "function") ack({ ok: true, ...payload });
+      } catch (err) {
+        const msg = err instanceof HttpError ? err.message : "Freeze failed";
+        debug("FREEZE failed", { gameId: data?.gameId, userId: socket.data.userId, error: msg });
+        socket.emit("game:error", { error: msg });
+        if (typeof ack === "function") ack({ ok: false, error: msg });
+      }
+    });
+
+    socket.on("game:remove", async (data, ack) => {
+      try {
+        const gameId = data?.gameId;
+        const targetIndex = data?.targetIndex;
+        if (!gameId) throw new HttpError(400, "Missing gameId");
+        if (!Number.isInteger(targetIndex) || targetIndex < 0 || targetIndex > 8) {
+          throw new HttpError(400, "Invalid target index");
+        }
+        debug("REMOVE request", { gameId, userId: socket.data.userId, targetIndex });
+        const game = await makeMove(gameId, socket.data.userId, -1, "remove", targetIndex);
+        debug("REMOVE applied", { gameId, targetIndex, board: game?.board });
+        const payload = broadcastGameUpdate(gameId, game);
+        if (typeof ack === "function") ack({ ok: true, ...payload });
+      } catch (err) {
+        const msg = err instanceof HttpError ? err.message : "Remove failed";
+        debug("REMOVE failed", { gameId: data?.gameId, userId: socket.data.userId, error: msg });
         socket.emit("game:error", { error: msg });
         if (typeof ack === "function") ack({ ok: false, error: msg });
       }
@@ -703,16 +699,24 @@ export const initSocket = (httpServer) => {
       try {
         const gameId = data?.gameId;
         if (!gameId) throw new HttpError(400, "Missing gameId");
+        debug("REMATCH request", { gameId, userId: socket.data.userId });
         const { game, reset } = await voteRematch(gameId, socket.data.userId);
-        const payload = emitGameUpdate(io, gameId, game);
+        debug("REMATCH response", { gameId, reset, status: game?.status, rematchVotes: game?.rematchVotes });
+        
         if (reset) {
-          scheduleTurnTimer(io, game);
+          const payload = emitGameUpdate(io, gameId, game);
+          debug("REMATCH reset complete", { gameId, turn: game?.turn, board: game?.board });
+          io.to(gameId).emit("game:start", payload);
+          if (typeof ack === "function") ack({ ok: true, reset: true, ...payload });
         } else {
+          const payload = emitGameUpdate(io, gameId, game);
           socket.to(gameId).emit("game:rematch-request", { from: socket.data.userId });
+          debug("REMATCH waiting for opponent", { gameId, rematchVotes: game?.rematchVotes });
+          if (typeof ack === "function") ack({ ok: true, reset: false, ...payload });
         }
-        if (typeof ack === "function") ack({ ok: true, reset, ...payload });
       } catch (err) {
         const msg = err instanceof HttpError ? err.message : "Rematch failed";
+        debug("REMATCH failed", { gameId: data?.gameId, userId: socket.data.userId, error: msg });
         socket.emit("game:error", { error: msg });
         if (typeof ack === "function") ack({ ok: false, error: msg });
       }
@@ -737,7 +741,6 @@ export const broadcastGameUpdate = async (gameId, game, moveId = null) => {
   const id = gameId || String(game?._id || "");
   if (!id) return null;
   const payload = emitGameUpdate(ioRef, id, game, moveId);
-  scheduleTurnTimer(ioRef, game);
   scheduleAutoRestart(ioRef, game);
   if (game?.status === "finished" && (game?.winner === "X" || game?.winner === "O" || game?.winner === "DRAW")) {
     try {
