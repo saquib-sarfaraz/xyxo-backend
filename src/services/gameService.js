@@ -263,9 +263,9 @@ export const makeMove = async (gameId, userId, index, powerUp = null, powerUpTar
   }
 
   const frozenMark = game.frozenPlayer;
-  if (frozenMark === mark) {
-    log("MOVE rejected - player frozen", { gameId, userId, frozenMark });
-    throw new HttpError(409, "You are frozen");
+  const isFrozen = frozenMark === mark;
+  if (isFrozen) {
+    log("PLAYER frozen - will auto-skip", { gameId, userId, frozenMark, mark });
   }
 
   const isProcessingUpdate = { $set: { isProcessing: true } };
@@ -290,10 +290,23 @@ export const makeMove = async (gameId, userId, index, powerUp = null, powerUpTar
 
     freshGame.board[index] = mark;
     freshGame.turnStartedAt = new Date();
-    log("BOARD after move", { gameId, board: freshGame.board });
+    if (!powerUp) {
+      freshGame.powerUpUsed = "";
+    }
+    log("BOARD after move", { gameId, board: freshGame.board, powerUpUsed: freshGame.powerUpUsed });
 
     let nextTurn = mark === "X" ? "O" : "X";
     let nextFrozen = "";
+
+    if (frozenMark && nextTurn === frozenMark) {
+      nextTurn = mark;
+      nextFrozen = "";
+      log("AUTO-SKIP frozen opponent", { gameId, frozenPlayer: frozenMark, stayingWith: mark });
+    } else if (isFrozen) {
+      nextFrozen = nextTurn;
+      nextTurn = mark;
+      log("PLAYER WAS FROZEN - move applied but skip next turn", { gameId, mark, willSkip: nextTurn });
+    }
 
     if (powerUp === "freeze" && freshGame.status === "playing") {
       freshGame.powerUpUsed = "freeze";

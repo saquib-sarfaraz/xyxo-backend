@@ -107,8 +107,9 @@ const toGameUpdatePayload = (game) => {
   return { ...game, game };
 };
 
-const emitGameUpdate = (io, gameId, game) => {
+const emitGameUpdate = (io, gameId, game, moveId = null) => {
   const payload = toGameUpdatePayload(game);
+  if (moveId) payload.moveId = moveId;
   io.to(gameId).emit("game:update", payload);
 
   const roomSize = io.sockets.adapter.rooms.get(gameId)?.size || 0;
@@ -675,16 +676,21 @@ export const initSocket = (httpServer) => {
       try {
         const gameId = data?.gameId;
         const index = data?.index;
+        const moveId = data?.moveId || null;
         const powerUp = data?.powerUp || null;
         const powerUpTarget = data?.powerUpTarget ?? null;
+        debug("MOVE request", { gameId, userId: socket.data.userId, index, moveId, powerUp, powerUpTarget });
         if (!Number.isInteger(index) || index < 0 || index > 8) {
           throw new HttpError(400, "Invalid move index");
         }
         const game = await makeMove(gameId, socket.data.userId, index, powerUp, powerUpTarget);
-        const payload = broadcastGameUpdate(gameId, game);
+        debug("MOVE applied", { gameId, turn: game?.turn, winner: game?.winner, board: game?.board });
+        const payload = broadcastGameUpdate(gameId, game, moveId);
+        debug("MOVE emitted", { gameId, moveId });
         if (typeof ack === "function") ack({ ok: true, ...payload });
       } catch (err) {
         const msg = err instanceof HttpError ? err.message : "Move failed";
+        debug("MOVE failed", { gameId, userId: socket.data.userId, error: msg });
         socket.emit("game:error", { error: msg });
         if (typeof ack === "function") ack({ ok: false, error: msg });
       }
@@ -723,11 +729,11 @@ export const initSocket = (httpServer) => {
 
 export const getIO = () => ioRef;
 
-export const broadcastGameUpdate = async (gameId, game) => {
+export const broadcastGameUpdate = async (gameId, game, moveId = null) => {
   if (!ioRef) return null;
   const id = gameId || String(game?._id || "");
   if (!id) return null;
-  const payload = emitGameUpdate(ioRef, id, game);
+  const payload = emitGameUpdate(ioRef, id, game, moveId);
   scheduleTurnTimer(ioRef, game);
   scheduleAutoRestart(ioRef, game);
   if (game?.status === "finished" && (game?.winner === "X" || game?.winner === "O" || game?.winner === "DRAW")) {
