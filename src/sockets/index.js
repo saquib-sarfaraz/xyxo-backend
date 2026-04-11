@@ -302,7 +302,10 @@ export const initSocket = (httpServer) => {
   const corsCredentials = env.CORS_ORIGIN !== "*";
 
   const io = new Server(httpServer, {
-    cors: { origin: corsOrigin, credentials: corsCredentials }
+    cors: { origin: corsOrigin, credentials: corsCredentials },
+    pingTimeout: 60000,
+    pingInterval: 25000,
+    transports: ["websocket", "polling"]
   });
   ioRef = io;
 
