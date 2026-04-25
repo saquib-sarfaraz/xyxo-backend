@@ -291,6 +291,9 @@ export const initSocket = (httpServer) => {
       debug("auth token received", { socketId: socket.id, ...tokenMeta(token) });
       if (!token) return next(socketAuthError("Missing token", "MISSING_TOKEN"));
       const decoded = verifyAccessToken(token);
+      if (decoded?.type && decoded.type !== "access") {
+        return next(socketAuthError("Invalid token", "INVALID_TOKEN"));
+      }
       const userId = decoded.sub || decoded.id;
       if (!userId) return next(socketAuthError("Invalid token", "INVALID_TOKEN"));
       debug("auth token decoded", {

@@ -16,12 +16,21 @@ Production-grade starter backend for a multiplayer Tic‑Tac‑Toe platform (pro
 - REST base path: `/api`
 - Health check: `GET /api/health`
 - Socket.IO namespace: default (`/`)
-- Auth: send `Authorization: Bearer <token>` on REST; for sockets pass `auth: { token }`
+- Auth:
+  - Access token: send `Authorization: Bearer <accessToken>` on REST; for sockets pass `auth: { token: accessToken }`
+  - Signup: `POST /api/auth/signup` with `{ name, password, username? , email? }` (provide at least one of `username`/`email`)
+  - Login: `POST /api/auth/login` with `{ password, username? , email? }` (provide at least one of `username`/`email`)
+  - Refresh token: stored in an httpOnly cookie; renew access token via `POST /api/auth/refresh`
+  - Logout: `POST /api/auth/logout` clears the refresh cookie
+- CORS cookies: set `CORS_ORIGIN` to your frontend origin(s) (comma-separated; not `*`) and use `withCredentials: true` on the client
+- Debug checklist: `docs/debugging.md`
+- Debug: set `AUTH_DEBUG=true` to log auth header/token verification on REST
 - Cleanup: server deletes old games on a daily schedule (defaults: finished + waiting older than 24h). If you install `node-cron`, it runs at midnight; otherwise it falls back to every 24h from process start.
 - Auto-restart: when a game finishes, the server emits `game:restart_timer` then restarts the round after ~3s (only if both players are still present).
 - Leaderboard:
   - Lifetime: `GET /api/leaderboard`
   - Rolling 7-day: `GET /api/leaderboard/rolling`
+  - Responses include `stats.xp` and `score` (alias for `stats.xp`)
 - Realtime events:
   - `game:join { gameId }` / `game:leave { gameId }`
   - `game:move { gameId, index }`

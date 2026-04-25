@@ -8,8 +8,13 @@ const envSchema = z.object({
   PORT: z.coerce.number().int().positive().default(5000),
   MONGO_URI: z.string().min(1),
   JWT_SECRET: z.string().min(32),
-  JWT_EXPIRES_IN: z.string().min(1).default("7d"),
+  JWT_EXPIRES_IN: z.string().min(1).default("15m"),
+  JWT_REFRESH_SECRET: z.string().min(32).optional(),
+  JWT_REFRESH_EXPIRES_IN: z.string().min(1).default("7d"),
+  REFRESH_TOKEN_COOKIE_NAME: z.string().min(1).default("refreshToken"),
+  REFRESH_TOKEN_COOKIE_PATH: z.string().min(1).default("/api/auth"),
   CORS_ORIGIN: z.string().min(1).default("*"),
+  AUTH_DEBUG: z.string().optional().default("false"),
   SOCKET_DEBUG: z.string().optional().default("false"),
   SOCKET_AUTH_BYPASS: z.string().optional().default("false")
 });

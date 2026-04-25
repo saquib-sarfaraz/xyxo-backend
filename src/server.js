@@ -18,14 +18,28 @@ const corsOrigin =
     ? "*"
     : env.CORS_ORIGIN.split(",").map((s) => s.trim()).filter(Boolean);
 const corsCredentials = env.CORS_ORIGIN !== "*";
+const corsOptions = {
+  origin: corsOrigin,
+  credentials: corsCredentials
+};
 
 app.use(helmet());
-app.use(
-  cors({
-    origin: corsOrigin,
-    credentials: corsCredentials
-  })
-);
+app.use(cors(corsOptions));
+app.options("*", cors(corsOptions));
+app.use((req, res, next) => {
+  // Compatibility: some clients accidentally prefix "/api" twice (e.g. /api/api/friends).
+  // We rewrite the URL for most routes to avoid losing auth headers on redirect.
+  // For auth routes (refresh/logout) we redirect so browsers send refresh cookies (path-scoped to /api/auth).
+  if (!/^\/api\/api(?:\/|\?|$)/.test(req.url)) return next();
+
+  const target = req.url.replace(/^\/api(\/api)+/, "/api");
+  if (/^\/api\/auth(?:\/|\?|$)/.test(target)) {
+    return res.redirect(308, target);
+  }
+
+  req.url = target;
+  return next();
+});
 app.use(express.json({ limit: "1mb" }));
 app.use(rateLimit({ windowMs: 60_000, max: 120 }));
 

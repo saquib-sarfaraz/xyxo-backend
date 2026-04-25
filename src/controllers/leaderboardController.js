@@ -6,6 +6,7 @@ const toLeaderboardItem = (user, index) => {
   const wins = Number(user?.stats?.wins || 0);
   const losses = Number(user?.stats?.losses || 0);
   const draws = Number(user?.stats?.draws || 0);
+  const xp = Number(user?.stats?.xp || 0);
   const total = wins + losses + draws;
   const winRate = total > 0 ? Math.round((wins / total) * 100) : 0;
 
@@ -16,11 +17,12 @@ const toLeaderboardItem = (user, index) => {
     username: user.username || "",
     avatar: user.avatar || "",
     region: user.region || "global",
+    score: xp,
     stats: {
       wins,
       losses,
       draws,
-      xp: Number(user?.stats?.xp || 0),
+      xp,
       winRate
     }
   };
@@ -109,6 +111,7 @@ export const listRollingLeaderboard = asyncHandler(async (req, res) => {
       username: row.username || "",
       avatar: row.avatar || "",
       region: row.region || "global",
+      score: Number(row?.xp || 0),
       stats: {
         games,
         wins,

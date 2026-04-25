@@ -3,6 +3,7 @@ import mongoose from "mongoose";
 const userSchema = new mongoose.Schema(
   {
     name: { type: String, required: true, trim: true },
+    email: { type: String, trim: true, lowercase: true },
     username: { type: String, required: true, unique: true, lowercase: true, trim: true, index: true },
     passwordHash: { type: String, required: true, select: false },
     avatar: { type: String, default: "" },
@@ -46,5 +47,6 @@ userSchema.virtual("winRate").get(function getWinRate() {
 });
 
 userSchema.index({ "stats.xp": -1, region: 1, username: 1 });
+userSchema.index({ email: 1 }, { unique: true, sparse: true });
 
 export default mongoose.model("User", userSchema);
